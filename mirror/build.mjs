@@ -26,4 +26,4 @@ await rewrite(target);
 if (!changed) throw new Error("未找到原 API 地址；请核对 docs 前端构建，停止发布。");
 await readFile(path.join(target, "index.html"), "utf8");
 await writeFile(path.join(target, "build.json"), JSON.stringify({ revision: process.env.COMMIT_REF || "local", built_at: new Date().toISOString() }) + "\n");
-console.log(`Mirror ready: ${changed} API origin replacement(s); requests use /api on this site.`);
+console.log(`Heruo OJ theme build ready: ${changed} API origin replacement(s); requests use /api on this site.`);

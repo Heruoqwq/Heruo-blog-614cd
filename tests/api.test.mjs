@@ -794,3 +794,40 @@ test('Team submissions, editorials, community solutions and discussions obey the
  assert.equal((await request('teams/'+team.id,'DELETE',undefined,a.token)).status,200);
  assert.equal((await request('oj/problems/'+pid,'GET',undefined,a.token)).status,404);
 });
+
+test('Closed teams reject new members and pending approvals, preserve members and reopen only by their owner',async(t)=>{
+ const {request,register,sqlite}=setup(t);
+ const a=await register('Alice'),b=await register('Bobby'),c=await register('Carol');
+ const team=await makeTeam(request,a),route='teams/'+team.id;
+ await request(route+'/join','POST',{},b.token);
+ const settings={name:team.name,description:team.description,visibility:'public',join_policy:'closed'};
+ const closed=await request(route,'PATCH',settings,a.token);
+ assert.equal(closed.status,200);assert.equal(closed.data.team.join_policy,'closed');
+ assert.equal((await request('teams')).data.teams[0].join_policy,'closed');
+ assert.equal((await request(route+'/join','POST',{},c.token)).status,403);
+ assert.equal((await request(route+'/join','POST',{},b.token)).status,403);
+ assert.equal((await request(route+'/members/'+b.user.id,'PATCH',{status:'active'},a.token)).status,403);
+ assert.equal(sqlite.prepare('SELECT count(*) AS n FROM team_members WHERE team_id=?').get(team.id).n,2);
+ assert.equal((await request(route,'GET',undefined,a.token)).data.team.my_status,'active');
+ assert.equal((await request(route,'PATCH',{...settings,join_policy:'open'},b.token)).status,403);
+ assert.equal((await request(route,'PATCH',{...settings,join_policy:'open'},a.token)).status,200);
+ assert.equal((await request(route+'/members/'+b.user.id,'PATCH',{status:'active'},a.token)).status,200);
+ assert.equal((await request(route+'/join','POST',{},c.token)).data.membership.status,'active');
+ const privateTeam=await makeTeam(request,a,{visibility:'private',join_policy:'closed'});
+ assert.equal(privateTeam.join_policy,'closed');
+ assert.equal((await request('teams/'+privateTeam.id+'/join','POST',{code:privateTeam.join_code},c.token)).status,403);
+ assert.equal((await request('teams/'+privateTeam.id+'/join','POST',{code:'wrong'},c.token)).status,404);
+});
+test('Adding the closed-join setting preserves pre-existing teams and dependent data',async(t)=>{
+ const db=new DatabaseSync(':memory:');t.after(()=>db.close());db.exec('PRAGMA foreign_keys=ON');
+ const migrations=readdirSync(new URL('../drizzle/',import.meta.url)).filter(x=>x.endsWith('.sql')).sort();
+ for(const f of migrations.filter(x=>!x.startsWith('0011_')))db.exec(readFileSync(new URL('../drizzle/'+f,import.meta.url),'utf8'));
+ db.exec("INSERT INTO users(id,username,display_name,password_hash,role,created_at) VALUES(1,'owner','Owner','hash','superadmin','now')");
+ db.exec("INSERT INTO teams(id,name,owner_id,join_policy,join_code,created_at,updated_at) VALUES('old-team','Existing team',1,'open','invite','now','now')");
+ db.exec("INSERT INTO team_members(team_id,user_id,role,status,joined_at) VALUES('old-team',1,'owner','active','now')");
+ for(const f of migrations.filter(x=>x.startsWith('0011_')))db.exec(readFileSync(new URL('../drizzle/'+f,import.meta.url),'utf8'));
+ assert.equal(db.prepare('SELECT join_closed FROM teams').get().join_closed,0);
+ assert.equal(db.prepare('SELECT join_policy FROM teams').get().join_policy,'open');
+ assert.equal(db.prepare('SELECT count(*) AS n FROM team_members').get().n,1);
+ assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
+});

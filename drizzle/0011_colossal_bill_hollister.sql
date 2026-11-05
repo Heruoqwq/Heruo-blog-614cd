@@ -1,0 +1,1 @@
+ALTER TABLE `teams` ADD `join_closed` integer DEFAULT 0 NOT NULL;

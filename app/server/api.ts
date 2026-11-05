@@ -787,7 +787,8 @@ async function teamAccess(db: D1Database, id: string, user: Account | null, memb
   return team;
 }
 const teamStaff = (t: Row) => t.my_status === "active" && ["owner", "admin"].includes(t.my_role);
-const teamPublic = (t: Row) => { const { join_code, ...value } = t; return { ...value, ...(teamStaff(t) ? { join_code } : {}) }; };
+const teamPolicy = (t: Row) => t.join_closed ? "closed" : t.join_policy;
+const teamPublic = (t: Row) => { const { join_code, join_closed, ...value } = t; return { ...value, join_policy: teamPolicy(t), ...(teamStaff(t) ? { join_code } : {}) }; };
 const discussionSelect = "SELECT d.*,u.display_name AS author_name,CASE WHEN p.team_id IS NULL THEN p.code ELSE substr(p.code,39) END AS problem_code,p.title AS problem_title,(SELECT count(*) FROM discussion_replies r WHERE r.discussion_id=d.id) AS reply_count FROM discussions d JOIN users u ON u.id=d.author_id LEFT JOIN oj_problems p ON p.id=d.problem_id";
 async function discussionAccess(db: D1Database, id: string, user: Account | null) {
   const thread = await db.prepare(discussionSelect + " WHERE d.id=?").bind(id).first<Row>();
@@ -848,16 +849,16 @@ async function handleCommunity(request: Request, db: D1Database, user: Account |
     if (method === "GET") {
       const offset = pagination(url), mine = url.searchParams.get("mine") === "1", q = (url.searchParams.get("q") || "").slice(0, 100);
       if (mine) signed();
-      const rows = await db.prepare("SELECT t.id,t.name,t.description,t.owner_id,t.visibility,t.join_policy,t.created_at,m.role AS my_role,m.status AS my_status,(SELECT count(*) FROM team_members a WHERE a.team_id=t.id AND a.status='active') AS member_count FROM teams t LEFT JOIN team_members m ON m.team_id=t.id AND m.user_id=? WHERE t.archived=0 AND " + (mine ? "m.user_id IS NOT NULL" : "(t.visibility='public' OR m.status='active')") + " AND t.name LIKE ? ORDER BY t.created_at DESC,t.id DESC LIMIT 31 OFFSET ?").bind(user?.id || 0, "%" + q + "%", offset).all();
+      const rows = await db.prepare("SELECT t.id,t.name,t.description,t.owner_id,t.visibility,CASE WHEN t.join_closed=1 THEN 'closed' ELSE t.join_policy END AS join_policy,t.created_at,m.role AS my_role,m.status AS my_status,(SELECT count(*) FROM team_members a WHERE a.team_id=t.id AND a.status='active') AS member_count FROM teams t LEFT JOIN team_members m ON m.team_id=t.id AND m.user_id=? WHERE t.archived=0 AND " + (mine ? "m.user_id IS NOT NULL" : "(t.visibility='public' OR m.status='active')") + " AND t.name LIKE ? ORDER BY t.created_at DESC,t.id DESC LIMIT 31 OFFSET ?").bind(user?.id || 0, "%" + q + "%", offset).all();
       return reply(page(rows.results, offset, "teams"));
     }
     if (method === "POST") {
       const u = await writer(), v = await body(request), name = field(v.name, "团队名称", 60), description = field(v.description ?? "", "简介", 2000, false);
-      if (!["public", "private"].includes(String(v.visibility)) || !["open", "approval"].includes(String(v.join_policy))) throw new ApiError(400, "团队设置不正确");
+      if (!["public", "private"].includes(String(v.visibility)) || !["open", "approval", "closed"].includes(String(v.join_policy))) throw new ApiError(400, "团队设置不正确");
       const owned = await db.prepare("SELECT count(*) AS n FROM teams WHERE owner_id=? AND archived=0").bind(u.id).first<{ n: number }>();
       if ((owned?.n || 0) >= 20) throw new ApiError(400, "最多创建 20 个团队");
       const id = crypto.randomUUID();
-      await db.batch([db.prepare("INSERT INTO teams(id,name,description,owner_id,visibility,join_policy,join_code,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)").bind(id, name, description, u.id, v.visibility, v.join_policy, hex(crypto.getRandomValues(new Uint8Array(16))), stamp, stamp), db.prepare("INSERT INTO team_members(team_id,user_id,role,status,joined_at) VALUES(?,?,'owner','active',?)").bind(id, u.id, stamp)]);
+      await db.batch([db.prepare("INSERT INTO teams(id,name,description,owner_id,visibility,join_policy,join_closed,join_code,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(id, name, description, u.id, v.visibility, v.join_policy === "closed" ? "approval" : v.join_policy, Number(v.join_policy === "closed"), hex(crypto.getRandomValues(new Uint8Array(16))), stamp, stamp), db.prepare("INSERT INTO team_members(team_id,user_id,role,status,joined_at) VALUES(?,?,'owner','active',?)").bind(id, u.id, stamp)]);
       return reply({ team: teamPublic(await teamAccess(db, id, u)) }, 201);
     }
   }
@@ -867,9 +868,10 @@ async function handleCommunity(request: Request, db: D1Database, user: Account |
     if (action === "join" && method === "POST") {
       const u = await writer(), v = await body(request), team = await db.prepare("SELECT * FROM teams WHERE id=? AND archived=0").bind(id).first<Row>();
       if (!team || (team.visibility === "private" && (typeof v.code !== "string" || !equal(v.code, team.join_code)))) throw new ApiError(404, "团队不存在或邀请码不正确");
-      const status = team.join_policy === "open" ? "active" : "pending";
-      await db.prepare("INSERT INTO team_members(team_id,user_id,role,status,joined_at) VALUES(?,?,'member',?,?) ON CONFLICT(team_id,user_id) DO NOTHING").bind(id, u.id, status, stamp).run();
+      if (team.join_closed) throw new ApiError(403, "此团队不允许加入");
+      await db.prepare("INSERT INTO team_members(team_id,user_id,role,status,joined_at) SELECT id,?,'member',CASE WHEN join_policy='open' THEN 'active' ELSE 'pending' END,? FROM teams WHERE id=? AND archived=0 AND join_closed=0 ON CONFLICT(team_id,user_id) DO NOTHING").bind(u.id, stamp, id).run();
       const membership = await db.prepare("SELECT status FROM team_members WHERE team_id=? AND user_id=?").bind(id, u.id).first();
+      if (!membership) throw new ApiError(403, "此团队不允许加入");
       return reply({ membership });
     }
     const team = await teamAccess(db, id, user);
@@ -883,10 +885,10 @@ async function handleCommunity(request: Request, db: D1Database, user: Account |
     if (!action && method === "PATCH") {
       signed(); if (!teamStaff(team)) throw new ApiError(403, "需要团队管理权限");
       const v = await body(request), name = field(v.name, "团队名称", 60), description = field(v.description ?? "", "简介", 2000, false);
-      if (!["public", "private"].includes(String(v.visibility)) || !["open", "approval"].includes(String(v.join_policy))) throw new ApiError(400, "团队设置不正确");
-      if (team.my_role !== "owner" && (v.visibility !== team.visibility || v.join_policy !== team.join_policy || v.rotate_code)) throw new ApiError(403, "入队规则只能由队长修改");
+      if (!["public", "private"].includes(String(v.visibility)) || !["open", "approval", "closed"].includes(String(v.join_policy))) throw new ApiError(400, "团队设置不正确");
+      if (team.my_role !== "owner" && (v.visibility !== team.visibility || v.join_policy !== teamPolicy(team) || v.rotate_code)) throw new ApiError(403, "入队规则只能由队长修改");
       if (v.rotate_code !== undefined && typeof v.rotate_code !== "boolean") throw new ApiError(400, "邀请码设置不正确");
-      await db.prepare("UPDATE teams SET name=?,description=?,visibility=?,join_policy=?,join_code=?,updated_at=? WHERE id=?").bind(name, description, v.visibility, v.join_policy, v.rotate_code ? hex(crypto.getRandomValues(new Uint8Array(16))) : team.join_code, stamp, id).run();
+      await db.prepare("UPDATE teams SET name=?,description=?,visibility=?,join_policy=?,join_closed=?,join_code=?,updated_at=? WHERE id=?").bind(name, description, v.visibility, v.join_policy === "closed" ? "approval" : v.join_policy, Number(v.join_policy === "closed"), v.rotate_code ? hex(crypto.getRandomValues(new Uint8Array(16))) : team.join_code, stamp, id).run();
       return reply({ team: teamPublic(await teamAccess(db, id, user)) });
     }
     if (!action && method === "DELETE") {
@@ -905,6 +907,7 @@ async function handleCommunity(request: Request, db: D1Database, user: Account |
         if (!teamStaff(team)) throw new ApiError(403, "需要团队管理权限");
         const v = await body(request), role = v.role ?? member.role, status = v.status ?? member.status;
         if (!["member", "admin"].includes(String(role)) || !["pending", "active"].includes(String(status))) throw new ApiError(400, "成员设置不正确");
+        if (team.join_closed && member.status !== "active" && status === "active") throw new ApiError(403, "此团队不允许加入，请先开放入队");
         if (role !== member.role && team.my_role !== "owner") throw new ApiError(403, "只有队长可以任免管理员");
         if (member.role === "admin" && team.my_role !== "owner") throw new ApiError(403, "只有队长可以管理管理员");
         await db.prepare("UPDATE team_members SET role=?,status=? WHERE team_id=? AND user_id=?").bind(role, status, id, target).run(); return reply({ ok: true });

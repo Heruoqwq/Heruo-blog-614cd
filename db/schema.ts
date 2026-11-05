@@ -132,6 +132,7 @@ export const teams = sqliteTable("teams", {
   ownerId: integer("owner_id").notNull().references(() => users.id),
   visibility: text("visibility").notNull().default("public"),
   joinPolicy: text("join_policy").notNull().default("approval"),
+  joinClosed: integer("join_closed").notNull().default(0),
   joinCode: text("join_code").notNull(),
   archived: integer("archived").notNull().default(0),
   createdAt: text("created_at").notNull(),
