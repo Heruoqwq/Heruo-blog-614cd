@@ -59,3 +59,6 @@ next-env.d.ts
 *.tsbuildinfo
 
 /.dev.vars*
+
+# The Netlify frontend is rebuilt from the tracked GitHub Pages output.
+/mirror/dist/

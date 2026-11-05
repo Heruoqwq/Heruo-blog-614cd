@@ -14,7 +14,9 @@
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
-    "build:github": "vite build --config vite.github.config.mts && node scripts/finish-github.mjs"
+    "build:github": "vite build --config vite.github.config.mts && node scripts/finish-github.mjs",
+    "build:mirror": "node mirror/build.mjs",
+    "test:mirror": "node --test mirror/test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

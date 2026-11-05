@@ -1,0 +1,45 @@
+"use client";
+import { useEffect, useState } from "react";
+import { Plus, ArrowLeft, MessageCircle, Pin, LockKeyhole } from "lucide-react";
+import Markdown from "./markdown";
+import { type Api, type User, can, go, time, Author, Loading, ErrorBox, Pager, SearchForm, MarkdownEditor, Confirm, ReplyForm, PageHeading } from "./community-shared";
+type Thread = { id: string; title: string; content: string; category: string; author_id: number; author_name: string; problem_id: number | null; problem_code?: string; team_id: string | null; pinned: number; locked: number; hidden: number; reply_count: number; created_at: string };
+type Reply = { id: string; author_id: number; author_name: string; content: string; created_at: string };
+export default function Discussions({ api, user, path }: { api: Api; user: User | null; path: string }) {
+  const route = path.split("?")[0], params = new URLSearchParams(path.split("?")[1] || ""), match = route.match(/^\/discussions\/([a-f0-9-]{36})(\/edit)?$/), id = match?.[1], editing = route === "/discussions/new" || Boolean(match?.[2]);
+  const teamId = params.get("team_id"), initialProblem = params.get("problem_id"), suffix = teamId ? "?team_id=" + teamId : initialProblem ? "?problem_id=" + initialProblem : "";
+  const [items, setItems] = useState<Thread[]>([]), [item, setItem] = useState<Thread | null>(null), [replies, setReplies] = useState<Reply[]>([]), [moderate, setModerate] = useState(false);
+  const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(""), [version, setVersion] = useState(0), [offset, setOffset] = useState(0), [next, setNext] = useState<number | null>(null);
+  const [query, setQuery] = useState(""), [manage, setManage] = useState(params.get("manage") === "1" && can(user, "discussions")), [title, setTitle] = useState(""), [content, setContent] = useState(""), [category, setCategory] = useState(initialProblem ? "题目" : "交流");
+  const [confirm, setConfirm] = useState<{ text: string; action: () => Promise<unknown> } | null>(null);
+  useEffect(() => {
+    let alive = true; setLoading(true); setError("");
+    const task = async () => {
+      if (id) {
+        const r = await api<{ discussion: Thread; replies: Reply[]; can_moderate: boolean; next_offset: number | null }>("discussions/" + id + "?offset=" + offset);
+        if (alive) { setItem(r.discussion); setReplies(r.replies); setModerate(r.can_moderate); setNext(r.next_offset); setTitle(r.discussion.title); setContent(r.discussion.content); setCategory(r.discussion.category); }
+      } else if (!editing) {
+        const r = await api<{ discussions: Thread[]; next_offset: number | null; can_moderate: boolean }>("discussions?offset=" + offset + "&q=" + encodeURIComponent(query) + (manage ? "&manage=1" : "") + (teamId ? "&team_id=" + teamId : "") + (initialProblem ? "&problem_id=" + initialProblem : ""));
+        if (alive) { setItems(r.discussions); setNext(r.next_offset); setModerate(r.can_moderate); }
+      }
+    };
+    void task().catch((e) => { if (alive) setError(e.message); }).finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [id, editing, offset, query, manage, version]);
+  async function act(action: () => Promise<unknown>) {
+    if (busy) return false; setBusy(true); setError("");
+    try { await action(); setVersion((v) => v + 1); return true; } catch (e) { setError((e as Error).message); return false; } finally { setBusy(false); setConfirm(null); }
+  }
+  async function save() {
+    await act(async () => { const r = await api<{ discussion: Thread }>(id ? "discussions/" + id : "discussions", id ? "PATCH" : "POST", { title, content, category, ...(teamId ? { team_id: teamId } : {}), ...(initialProblem ? { problem_id: Number(initialProblem) } : {}) }); go("/discussions/" + r.discussion.id); });
+  }
+  return <section className="community-page"><PageHeading title={editing ? id ? "编辑讨论" : "发起讨论" : id ? "讨论" : teamId ? "团队讨论" : initialProblem ? "题目讨论" : "讨论区"}>{!id && !editing && user && <a className="button primary" href={"#/discussions/new" + suffix}><Plus size={16}/>发起讨论</a>}</PageHeading><ErrorBox error={error}/>
+    {loading ? <Loading/> : editing ? !user ? <p className="community-login"><a href="#/login">登录</a>后发起讨论</p> : id && item?.author_id !== user.id && !moderate ? <p>没有编辑权限</p> : <form className="community-form" onSubmit={(e) => { e.preventDefault(); void save(); }}><a className="back-link" href={id ? "#/discussions/" + id : "#/discussions" + suffix}><ArrowLeft size={14}/>返回</a><label>标题<input required maxLength={150} value={title} onChange={(e) => setTitle(e.target.value)}/></label>{!id && <label>分类<select value={category} onChange={(e) => setCategory(e.target.value)}>{["交流", "题目", "站务"].map((s) => <option key={s}>{s}</option>)}</select></label>}<MarkdownEditor value={content} onChange={setContent}/><button className="button primary" disabled={busy || !title.trim() || !content.trim()}>{id ? "保存" : "发表"}</button></form> : id && item ? <>
+      <a className="back-link" href={"#/discussions" + (item.team_id ? "?team_id=" + item.team_id : item.problem_id ? "?problem_id=" + item.problem_id : "")}><ArrowLeft size={14}/>返回讨论列表</a>
+      {item.team_id && <p className="team-bank-link"><a href={"#/teams/" + item.team_id}>返回团队</a><span>此讨论仅团队成员可见</span></p>}<article className="community-article"><div className="community-meta"><span className="community-badge">{item.category}</span>{Boolean(item.pinned) && <span><Pin size={13}/>置顶</span>}{Boolean(item.locked) && <span><LockKeyhole size={13}/>已锁定</span>}{Boolean(item.hidden) && <span className="danger">已隐藏</span>}<Author id={item.author_id} name={item.author_name}/><span>{time(item.created_at)}</span></div><h2>{item.title}</h2>{item.problem_id && <a className="text-button" href={"#/oj/problem/" + item.problem_id}>{item.problem_code}</a>}<Markdown content={item.content}/></article>
+      <div className="community-actions">{user && (item.author_id === user.id || moderate) && <><a className="button secondary" href={"#/discussions/" + id + "/edit"}>编辑</a><button className="text-button danger" disabled={busy} onClick={() => setConfirm({ text: "删除此讨论及所有回复？", action: async () => { await api("discussions/" + id, "DELETE"); go("/discussions" + (item.team_id ? "?team_id=" + item.team_id : "")); } })}>删除</button></>}{moderate && ([ ["pinned", item.pinned ? "取消置顶" : "置顶"], ["locked", item.locked ? "解锁" : "锁定"], ["hidden", item.hidden ? "恢复显示" : "隐藏"] ] as const).map(([key, name]) => <button key={key} className="button secondary" disabled={busy} onClick={() => void act(() => api("discussions/" + id, "PATCH", { [key]: !item[key] }))}>{name}</button>)}</div>
+      <div className="community-comments"><h3>回复 · {item.reply_count}</h3>{replies.map((r) => <article className="reply-card" key={r.id}><div className="community-meta"><Author id={r.author_id} name={r.author_name}/><span>{time(r.created_at)}</span>{user && (r.author_id === user.id || moderate) && <button className="text-button danger" disabled={busy} onClick={() => setConfirm({ text: "删除这条回复？", action: () => api("discussions/" + id + "/replies/" + r.id, "DELETE") })}>删除</button>}</div><Markdown content={r.content}/></article>)}{!replies.length && <p className="muted">暂无回复</p>}<Pager offset={offset} next={next} onChange={setOffset}/>{item.locked || item.hidden ? <p className="community-login">此讨论已锁定或隐藏</p> : <ReplyForm user={user} busy={busy} onSubmit={(text) => act(() => api("discussions/" + id + "/replies", "POST", { content: text }))}/>}</div>
+    </> : !id ? <>{(teamId || initialProblem) && <a className="back-link" href={teamId ? "#/teams/" + teamId : "#/oj/problem/" + initialProblem}><ArrowLeft size={14}/>{teamId ? "返回团队" : "返回题目"}</a>}{moderate && !teamId && <label className="inline-check"><input type="checkbox" checked={manage} onChange={(e) => { setManage(e.target.checked); setOffset(0); }}/>管理模式（含隐藏讨论）</label>}<SearchForm value={query} placeholder="搜索讨论" onSearch={(q) => { setQuery(q); setOffset(0); }}/><div className="community-list">{items.map((d) => <article key={d.id} className="community-card"><div className="community-card-main"><div className="community-meta"><span>{d.category}</span>{Boolean(d.pinned) && <span><Pin size={12}/>置顶</span>}{Boolean(d.locked) && <span><LockKeyhole size={12}/>锁定</span>}{Boolean(d.hidden) && <span className="danger">已隐藏</span>}{d.problem_code && <a href={"#/oj/problem/" + d.problem_id}>{d.problem_code}</a>}</div><h2><a href={"#/discussions/" + d.id}>{d.title}</a></h2><div className="community-meta"><Author id={d.author_id} name={d.author_name}/><span>{time(d.created_at)}</span></div></div><span className="community-counts"><MessageCircle size={16}/>{d.reply_count}</span></article>)}</div>{!items.length && !error && <div className="empty-state">暂无讨论</div>}<Pager offset={offset} next={next} onChange={setOffset}/></> : null}
+    {confirm && <Confirm text={confirm.text} busy={busy} onCancel={() => setConfirm(null)} onConfirm={() => void act(confirm.action)}/>}
+  </section>;
+}

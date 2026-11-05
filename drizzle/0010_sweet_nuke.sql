@@ -1,0 +1,1 @@
+ALTER TABLE `teams` ADD `archived` integer DEFAULT 0 NOT NULL;

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, check } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, check, primaryKey } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -60,6 +60,7 @@ export const ojProblems = sqliteTable("oj_problems", {
   revision: integer("revision").notNull().default(1),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+  teamId: text("team_id").references((): any => teams.id, { onDelete: "cascade" }),
 });
 export const ojFiles = sqliteTable("oj_files", {
   id: text("id").primaryKey(),
@@ -67,6 +68,7 @@ export const ojFiles = sqliteTable("oj_files", {
   name: text("name").notNull(),
   size: integer("size").notNull(),
   createdAt: text("created_at").notNull(),
+  teamId: text("team_id").references((): any => teams.id, { onDelete: "cascade" }),
 });
 export const ojCases = sqliteTable("oj_cases", {
   id: text("id").primaryKey(),
@@ -109,3 +111,85 @@ export const ojSubmissions = sqliteTable("oj_submissions", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 }, (t) => [index("oj_submissions_user").on(t.userId, t.createdAt), index("oj_submissions_problem").on(t.problemId, t.createdAt)]);
+export const userPermissions = sqliteTable("user_permissions", {
+  userId: integer("user_id").notNull().references(() => users.id),
+  permission: text("permission").notNull(),
+}, (t) => [primaryKey({ columns: [t.userId, t.permission] }), check("permission_name", sql.raw("permission IN ('users','posts','solutions','problems','discussions')"))]);
+export const sanctions = sqliteTable("sanctions", {
+  id: text("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id),
+  actorId: integer("actor_id").notNull().references(() => users.id),
+  kind: text("kind").notNull(),
+  reason: text("reason").notNull(),
+  expiresAt: integer("expires_at"),
+  revokedAt: text("revoked_at"),
+  createdAt: text("created_at").notNull(),
+}, (t) => [index("sanctions_user").on(t.userId, t.kind, t.expiresAt), check("sanction_kind", sql.raw("kind IN ('mute','ban')"))]);
+export const teams = sqliteTable("teams", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  ownerId: integer("owner_id").notNull().references(() => users.id),
+  visibility: text("visibility").notNull().default("public"),
+  joinPolicy: text("join_policy").notNull().default("approval"),
+  joinCode: text("join_code").notNull(),
+  archived: integer("archived").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, () => [check("team_visibility", sql.raw("visibility IN ('public','private')")), check("team_join_policy", sql.raw("join_policy IN ('open','approval')"))]);
+export const teamMembers = sqliteTable("team_members", {
+  teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  role: text("role").notNull().default("member"),
+  status: text("status").notNull().default("pending"),
+  joinedAt: text("joined_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.teamId, t.userId] }), index("team_members_user").on(t.userId, t.teamId), check("team_member_role", sql.raw("role IN ('owner','admin','member')")), check("team_member_status", sql.raw("status IN ('active','pending')"))]);
+export const teamProblems = sqliteTable("team_problems", {
+  teamId: text("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }),
+  problemId: integer("problem_id").notNull().references(() => ojProblems.id),
+  addedAt: text("added_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.teamId, t.problemId] })]);
+export const discussions = sqliteTable("discussions", {
+  id: text("id").primaryKey(),
+  authorId: integer("author_id").notNull().references(() => users.id),
+  problemId: integer("problem_id").references(() => ojProblems.id),
+  teamId: text("team_id").references(() => teams.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  category: text("category").notNull().default("交流"),
+  pinned: integer("pinned").notNull().default(0),
+  locked: integer("locked").notNull().default(0),
+  hidden: integer("hidden").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (t) => [index("discussions_feed").on(t.teamId, t.hidden, t.pinned, t.createdAt), index("discussions_problem").on(t.problemId)]);
+export const discussionReplies = sqliteTable("discussion_replies", {
+  id: text("id").primaryKey(),
+  discussionId: text("discussion_id").notNull().references(() => discussions.id, { onDelete: "cascade" }),
+  authorId: integer("author_id").notNull().references(() => users.id),
+  content: text("content").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (t) => [index("discussion_replies_thread").on(t.discussionId, t.createdAt)]);
+export const solutions = sqliteTable("solutions", {
+  id: text("id").primaryKey(),
+  problemId: integer("problem_id").notNull().references(() => ojProblems.id),
+  authorId: integer("author_id").notNull().references(() => users.id),
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  status: text("status").notNull().default("draft"),
+  featured: integer("featured").notNull().default(0),
+  reviewNote: text("review_note").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (t) => [index("solutions_feed").on(t.problemId, t.status, t.createdAt), index("solutions_author").on(t.authorId), check("solution_status", sql.raw("status IN ('draft','pending','published','rejected')"))]);
+export const solutionLikes = sqliteTable("solution_likes", {
+  solutionId: text("solution_id").notNull().references(() => solutions.id, { onDelete: "cascade" }),
+  userId: integer("user_id").notNull().references(() => users.id),
+}, (t) => [primaryKey({ columns: [t.solutionId, t.userId] })]);
+export const solutionComments = sqliteTable("solution_comments", {
+  id: text("id").primaryKey(),
+  solutionId: text("solution_id").notNull().references(() => solutions.id, { onDelete: "cascade" }),
+  authorId: integer("author_id").notNull().references(() => users.id),
+  content: text("content").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (t) => [index("solution_comments_thread").on(t.solutionId, t.createdAt)]);
