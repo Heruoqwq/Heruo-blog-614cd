@@ -11,6 +11,9 @@
 [[edge_functions]]
   function = "api"
   path = "/api/*"
+[[edge_functions]]
+  function = "api"
+  path = "/avatars/heruo.jpg"
 [[headers]]
   for = "/index.html"
   [headers.values]

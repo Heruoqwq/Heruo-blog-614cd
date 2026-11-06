@@ -1,4 +1,5 @@
 const upstream = "https://tony-journal-heruo.prime-gleam-7947.chatgpt.site";
+const ownerAvatar = "/avatars/heruo.jpg";
 const methods = new Set(["GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS"]);
 const common = {
   "Cache-Control": "private, no-store",
@@ -12,7 +13,9 @@ const failure = (error, status) => new Response(JSON.stringify({ error }), {
 });
 export default async function proxy(request) {
   const url = new URL(request.url);
-  if (url.pathname !== "/api" && !url.pathname.startsWith("/api/")) return failure("接口不存在", 404);
+  const avatar = url.pathname === ownerAvatar;
+  if (!avatar && url.pathname !== "/api" && !url.pathname.startsWith("/api/")) return failure("接口不存在", 404);
+  if (avatar && !["GET", "HEAD"].includes(request.method)) return failure("不支持此请求方式", 405);
   if (!methods.has(request.method)) return failure("不支持此请求方式", 405);
   const origin = request.headers.get("origin");
   if (origin && origin !== url.origin) return failure("此来源未获授权", 403);
@@ -21,7 +24,7 @@ export default async function proxy(request) {
   target.pathname = url.pathname;
   target.search = url.search;
   const headers = new Headers({ Origin: upstream });
-  for (const key of ["content-type", "authorization", "accept"]) {
+  for (const key of (avatar ? ["accept"] : ["content-type", "authorization", "accept"])) {
     const value = request.headers.get(key);
     if (value !== null) headers.set(key, value);
   }
