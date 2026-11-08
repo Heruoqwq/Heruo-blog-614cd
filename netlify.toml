@@ -2,6 +2,7 @@
   base = "mirror"
   command = "node build.mjs"
   publish = "dist"
+  ignore = "git diff --quiet \"$CACHED_COMMIT_REF\" \"$COMMIT_REF\" -- ':(top)docs' ':(top)mirror' ':(top)netlify.toml'"
 [build.environment]
   NODE_VERSION = "22"
   NETLIFY_NEXT_PLUGIN_SKIP = "true"
