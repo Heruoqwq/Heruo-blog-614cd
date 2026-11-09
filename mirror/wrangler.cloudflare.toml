@@ -1,6 +1,6 @@
 name = "heruo-oj"
 main = "cloudflare-worker.mjs"
-compatibility_date = "2026-11-09"
+compatibility_date = "2026-05-15"
 workers_dev = true
 
 [assets]
